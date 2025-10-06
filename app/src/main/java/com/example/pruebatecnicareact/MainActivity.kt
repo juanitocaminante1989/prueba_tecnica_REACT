@@ -21,8 +21,11 @@ import androidx.activity.result.ActivityResult
 import androidx.activity.result.ActivityResultCallback
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Observer
 import com.example.pruebatecnicareact.databinding.ActivityMainBinding
+import com.example.pruebatecnicareact.viewmodel.MainActivityViewModel
 import com.regula.facesdk.FaceSDK
 import com.regula.facesdk.configuration.FaceCaptureConfiguration
 import com.regula.facesdk.configuration.InitializationConfiguration
@@ -35,6 +38,7 @@ import com.regula.facesdk.model.results.FaceCaptureResponse
 import com.regula.facesdk.model.results.matchfaces.MatchFacesResponse
 import com.regula.facesdk.model.results.matchfaces.MatchFacesSimilarityThresholdSplit
 import com.regula.facesdk.request.MatchFacesRequest
+import dagger.hilt.android.AndroidEntryPoint
 import java.io.IOException
 import kotlin.math.max
 
@@ -42,6 +46,7 @@ enum class ActionPicker {
     CAMERA, REGULA, GALLERY
 }
 
+@AndroidEntryPoint
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
@@ -49,6 +54,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var imageType2: ImageType
     private lateinit var faceBitmaps: ArrayList<Bitmap>
     private var currentImageView: ImageView? = null
+    private val mainActivityViewModel: MainActivityViewModel by viewModels()
 
     public override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -57,6 +63,22 @@ class MainActivity : AppCompatActivity() {
 
         val license = getLicense(this)
         initFaceSdk(license)
+
+        mainActivityViewModel.initConfig.observe(this, Observer { initConfig ->
+            FaceSDK.Instance().initialize(this, initConfig) { status, e ->
+                binding.progressLayout.visibility = View.INVISIBLE
+                if (!status) {
+                    Log.d("MainActivity", "FaceSDK error: " + e?.message)
+                    Toast.makeText(
+                        this,
+                        "Error en la inicialización: " + if (e != null) e.message else "",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                binding.mainlayout.visibility = View.VISIBLE
+                Log.d("MainActivity", "Inicilización FaceSDK completada ")
+            }
+        })
 
         //Bot'on de comparaciión de imágenes
         binding.buttonMatch.setOnClickListener {
@@ -144,22 +166,11 @@ class MainActivity : AppCompatActivity() {
 
         binding.mainlayout.visibility = View.GONE
         license?.let {
-            val initConfig: InitializationConfiguration =
-                InitializationConfiguration.Builder(license).setLicenseUpdate(true).build()
-            FaceSDK.Instance().initialize(this, initConfig) { status, e ->
-                binding.progressLayout.visibility = View.INVISIBLE
-                if (!status) {
-                    Log.d("MainActivity", "FaceSDK error: " + e?.message)
-                    Toast.makeText(
-                        this,
-                        "Error en la inicialización: " + if (e != null) e.message else "",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-                binding.mainlayout.visibility = View.VISIBLE
-                Log.d("MainActivity", "Inicilización FaceSDK completada ")
-            }
+            mainActivityViewModel.initializa(it)
+
         } ?: return
+
+//
     }
 
     //Función para determinar si debemos abrir la cámara, la galería o la cámara de Regula

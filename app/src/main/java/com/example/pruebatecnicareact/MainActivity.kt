@@ -24,6 +24,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Observer
+import com.example.pruebatecnicareact.data.model.Similarity
 import com.example.pruebatecnicareact.databinding.ActivityMainBinding
 import com.example.pruebatecnicareact.viewmodel.MainActivityViewModel
 import com.regula.facesdk.FaceSDK
@@ -55,6 +56,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var faceBitmaps: ArrayList<Bitmap>
     private var currentImageView: ImageView? = null
     private val mainActivityViewModel: MainActivityViewModel by viewModels()
+    lateinit var initConfig: InitializationConfiguration
+    lateinit var faceSDK: FaceSDK
+    private var matchFaces : ArrayList<MatchFacesImage> = ArrayList()
 
     public override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -65,7 +69,13 @@ class MainActivity : AppCompatActivity() {
         initFaceSdk(license)
 
         mainActivityViewModel.initConfig.observe(this, Observer { initConfig ->
-            FaceSDK.Instance().initialize(this, initConfig) { status, e ->
+            this.initConfig = initConfig
+            mainActivityViewModel.startScanning()
+        })
+
+        mainActivityViewModel.faceSDK.observe(this, Observer { faceSDK ->
+            this.faceSDK = faceSDK
+            this.faceSDK.initialize(this, initConfig) { status, e ->
                 binding.progressLayout.visibility = View.INVISIBLE
                 if (!status) {
                     Log.d("MainActivity", "FaceSDK error: " + e?.message)
@@ -78,6 +88,47 @@ class MainActivity : AppCompatActivity() {
                 binding.mainlayout.visibility = View.VISIBLE
                 Log.d("MainActivity", "Inicilización FaceSDK completada ")
             }
+
+        })
+
+        mainActivityViewModel.similiarity.observe(this, Observer { similiarity ->
+            //Pone la similitud entre las dos imágenes
+
+            when(similiarity) {
+                is Similarity.Error -> {
+                    val text = "Ha ocurrido un error: $similiarity"
+                    binding.textViewSimilarity.visibility = View.VISIBLE
+                    binding.textViewSimilarity.text = text
+                }
+                is Similarity.Success -> {
+
+                    val text = "Similitud: ${similiarity.message}"
+                    binding.textViewSimilarity.visibility = View.VISIBLE
+                    binding.textViewSimilarity.text = text
+
+                    faceBitmaps = ArrayList()
+
+                    //Inserta las imagenes detectadas en el array
+                    for (matchFaces in similiarity.detections) {
+                        for (face in matchFaces.faces)
+                            face.crop?.let {
+                                faceBitmaps.add(it)
+                            }
+                    }
+                }
+            }
+
+            val l = faceBitmaps.size
+            if (l > 0) {
+                binding.buttonSee.text = "Detecciones ($l)"
+                binding.buttonSee.visibility = View.VISIBLE
+            } else {
+                binding.buttonSee.visibility = View.GONE
+            }
+
+            binding.buttonMatch.isEnabled = true
+            binding.buttonClear.isEnabled = true
+
         })
 
         //Bot'on de comparaciión de imágenes
@@ -86,7 +137,9 @@ class MainActivity : AppCompatActivity() {
                 binding.detectionContainer.visibility = View.VISIBLE
                 binding.textViewSimilarity.text = "Procesando…"
 
-                matchFaces(getImageBitmap(binding.imageView1), getImageBitmap(binding.imageView2))
+                getFaces(getImageBitmap(binding.imageView1), imageType1)
+                getFaces(getImageBitmap(binding.imageView2), imageType2)
+                matchFaces()
                 binding.buttonMatch.isEnabled = false
                 binding.buttonClear.isEnabled = false
             } else {
@@ -176,10 +229,24 @@ class MainActivity : AppCompatActivity() {
     //Función para determinar si debemos abrir la cámara, la galería o la cámara de Regula
     private fun buttonAction(imageView: ImageView?, action: ActionPicker) {
 
+        binding.imageViewerContainer.visibility = View.GONE
+        binding.buttonSee.visibility = View.GONE
+        binding.textViewSimilarity.visibility = View.GONE
         when (action) {
             ActionPicker.CAMERA -> {
                 currentImageView = imageView
 
+                when (imageView) {
+                    binding.imageView1 -> {
+
+                        imageType1 = ImageType.LIVE
+                    }
+
+                    binding.imageView2 -> {
+
+                        imageType2 = ImageType.LIVE
+                    }
+                }
                 openDefaultCamera()
             }
 
@@ -193,11 +260,14 @@ class MainActivity : AppCompatActivity() {
                 when (imageView) {
                     binding.imageView1 -> {
 
+                        imageType1 = ImageType.PRINTED
                         openGallery(PICK_IMAGE_1)
+
                     }
 
                     binding.imageView2 -> {
 
+                        imageType2 = ImageType.PRINTED
                         openGallery(PICK_IMAGE_2)
                     }
                 }
@@ -271,7 +341,7 @@ class MainActivity : AppCompatActivity() {
     private fun startFaceCaptureActivity(imageView: ImageView?) {
         val configuration = FaceCaptureConfiguration.Builder().setCameraSwitchEnabled(true).build()
 
-        FaceSDK.Instance().presentFaceCaptureActivity(
+        faceSDK.presentFaceCaptureActivity(
             this,
             configuration
         ) { faceCaptureResponse: FaceCaptureResponse? ->
@@ -293,12 +363,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun getFaces(bitmap : Bitmap, imageType: ImageType) {
+        matchFaces.add(MatchFacesImage(bitmap, imageType, false))
+    }
+
+
     //Función para comparar las imágenes
-    private fun matchFaces(first: Bitmap, second: Bitmap) {
-        //Coge las 2 imágenes insertadas e inicia la comparación
-        val firstImage = MatchFacesImage(first, imageType1, false)
-        val secondImage = MatchFacesImage(second, imageType2, false)
-        val matchFacesRequest = MatchFacesRequest(arrayListOf(firstImage, secondImage))
+    private fun matchFaces() {
+        val matchFacesRequest = MatchFacesRequest(matchFaces)
 
         //Recorta la cara y pone un fondo blanco
         val crop = OutputImageCrop(
@@ -307,47 +379,12 @@ class MainActivity : AppCompatActivity() {
         val outputImageParams = OutputImageParams(crop, Color.WHITE)
         matchFacesRequest.outputImageParams = outputImageParams
 
-
-        FaceSDK.Instance()
+        faceSDK
             .matchFaces(this, matchFacesRequest) { matchFacesResponse: MatchFacesResponse ->
-                val split = MatchFacesSimilarityThresholdSplit(matchFacesResponse.results, 0.75)
-                val similarity = if (split.matchedFaces.size > 0) {
-                    split.matchedFaces[0].similarity
-                } else if (split.unmatchedFaces.size > 0) {
-                    split.unmatchedFaces[0].similarity
-                } else {
-                    null
-                }
-                //Pone la similitud entre las dos imágenes
-                val text = similarity?.let {
-                    "Similitud: " + String.format("%.2f", it * 100) + "%"
-                } ?: matchFacesResponse.exception?.let {
-                    "Similitud: " + it.message
-                } ?: "Similitud: "
-
-                binding.textViewSimilarity.text = text
-
-                faceBitmaps = ArrayList()
-
-                //Inserta las imagenes detectadas en el array
-                for (matchFaces in matchFacesResponse.detections) {
-                    for (face in matchFaces.faces)
-                        face.crop?.let {
-                            faceBitmaps.add(it)
-                        }
-                }
-
-                val l = faceBitmaps.size
-                if (l > 0) {
-                    binding.buttonSee.text = "Detecciones ($l)"
-                    binding.buttonSee.visibility = View.VISIBLE
-                } else {
-                    binding.buttonSee.visibility = View.GONE
-                }
-
-                binding.buttonMatch.isEnabled = true
-                binding.buttonClear.isEnabled = true
+                mainActivityViewModel.getSimilirity(matchFacesResponse)
             }
+
+        matchFaces = ArrayList()
     }
 
     companion object {
